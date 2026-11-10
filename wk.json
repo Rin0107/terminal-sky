@@ -1,0 +1,34 @@
+{
+  "stack": "go-cli",
+  "idea": "00003-terminal-planetarium",
+  "egress_allow": [],
+  "deny_modules": [
+    "github.com/sashabaranov/go-openai",
+    "github.com/anthropics/anthropic-sdk-go",
+    "github.com/stripe/stripe-go",
+    "github.com/getsentry/sentry-go",
+    "github.com/posthog/posthog-go",
+    "github.com/segmentio/analytics-go",
+    "github.com/supabase-community"
+  ],
+  "forbidden_fields": [
+    "email",
+    "password",
+    "phone",
+    "address",
+    "birth",
+    "real_name",
+    "ip",
+    "ip_address",
+    "user_agent",
+    "token",
+    "secret",
+    "api_key",
+    "credit",
+    "card_number",
+    "latitude",
+    "longitude",
+    "device_id",
+    "fingerprint"
+  ]
+}

@@ -1,0 +1,6 @@
+version: "2"
+linters:
+  enable: [gosec, errcheck, govet, staticcheck, unused, ineffassign, bodyclose, noctx, gocyclo]
+  settings:
+    gocyclo:
+      min-complexity: 15
