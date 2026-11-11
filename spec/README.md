@@ -12,6 +12,9 @@
 | 2. 明るい星ほど目立つ文字 (● > * > +) | `TestSpec_SymbolMonotonic` (等級 -2〜3 を 0.01 刻みで、a ≤ b の全部のペア) |
 | 3. 地平線より上の星は、楕円の中に置かれる | `TestSpec_ProjectInside` (高度・方位の格子 × 大きさ) |
 | (描くのは地平線より上の星だけ) | `TestSpec_VisibleAboveHorizon` (目録 × 1 年の時刻) |
+| 4. 両端とも地平線より下の星座線は描かない | `TestSpec_SegmentShown` (全部の星座線 × 1 年の時刻) |
+| 5. 星座線の点は地平線の内側だけで、格子に収まる | `TestSpec_LineInsideHorizon` (格子の外まで広げた全部の升 × 大きさ) |
+| 6. 星座線の文字は見た目の傾きと合う | `TestSpec_LineGlyph` (行・列のずれ -60〜60 の全部) |
 
 決まり:
 - 振る舞いを変える PR は、先に spec を変える。spec と実装と TestSpec_ を同じ PR で

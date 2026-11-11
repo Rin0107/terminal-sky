@@ -100,3 +100,106 @@ func TestSpec_VisibleAboveHorizon(t *testing.T) {
 		t.Fatal(n)
 	}
 }
+
+// inGridAndEllipseBox は (row, col) が幅 w・高さ h の格子の中で、楕円を囲む四角の中か。
+func inGridAndEllipseBox(row, col, w, h int) bool {
+	rx, ry, cx, cy := layout(w, h)
+	return row >= 0 && row < h && col >= 0 && col < w && row >= cy-ry && row <= cy+ry && col >= cx-rx && col <= cx+rx
+}
+
+// checkSegmentsInside は幅 w・高さ h の格子で、端点 (上下左右に格子 1 つ分外まで、高さ・幅の約 4 分の 1 刻み) の全部の組に線を引き、
+// 線の升がすべて地平線の楕円の内側にあることと、内側を通る線が少なくとも 1 升は描かれることを確かめる。
+func checkSegmentsInside(t *testing.T, w, h int) {
+	t.Helper()
+	rx, ry, cx, cy := layout(w, h)
+	var pts [][2]int
+	for r := -h; r < 2*h; r += 1 + h/4 {
+		for c := -w; c < 2*w; c += 1 + w/4 {
+			pts = append(pts, [2]int{r, c})
+		}
+	}
+	drawnAny := 0
+	for _, p := range pts {
+		for _, q := range pts {
+			g := newGrid(w, h)
+			g.segment(p[0], p[1], q[0], q[1], rx, ry, cx, cy)
+			for row := range g.cells {
+				for col, c := range g.cells[row] {
+					if c.k == line && !insideHorizon(row, col, rx, ry, cx, cy) {
+						t.Fatalf("%dx%d: %v→%v の線が (%d, %d) で地平線の外", w, h, p, q, row, col)
+					}
+					if c.k == line {
+						drawnAny++
+					}
+				}
+			}
+		}
+	}
+	if drawnAny == 0 {
+		t.Fatalf("%dx%d: 線が 1 升も描かれない", w, h)
+	}
+}
+
+// TestSpec_LineInsideHorizon: 5. 楕円の内側の点は、どの大きさの格子にも収まる (線は格子からはみ出さない)。
+func TestSpec_LineInsideHorizon(t *testing.T) {
+	n, want := 0, 0
+	for _, wh := range [][2]int{{20, 7}, {21, 11}, {44, 23}, {60, 19}, {80, 23}, {131, 59}} {
+		w, h := wh[0], wh[1]
+		want += 9 * w * h
+		rx, ry, cx, cy := layout(w, h)
+		for row := -h; row < 2*h; row++ {
+			for col := -w; col < 2*w; col++ {
+				if insideHorizon(row, col, rx, ry, cx, cy) && !inGridAndEllipseBox(row, col, w, h) {
+					t.Fatalf("%v: (%d, %d) は内側なのに格子・楕円の外", wh, row, col)
+				}
+				n++
+			}
+		}
+		// 実装: 格子の外まで含む端点の組で g.segment を呼び、置かれた線の升はどれも楕円の内側
+		checkSegmentsInside(t, w, h)
+		// 中心は内側、縁 (N・E の升) は内側でない
+		if !insideHorizon(cy, cx, rx, ry, cx, cy) || insideHorizon(cy-ry, cx, rx, ry, cx, cy) || insideHorizon(cy, cx+rx, rx, ry, cx, cy) {
+			t.Fatalf("%v: 中心か縁", wh)
+		}
+	}
+	if n != want {
+		t.Fatal(n)
+	}
+}
+
+// TestSpec_LineGlyph: 6. 線の文字は見た目の傾きと合う (行のずれ・列のずれ -60〜60 の全部)。
+func TestSpec_LineGlyph(t *testing.T) {
+	n := 0
+	for dr := -60; dr <= 60; dr++ {
+		for dc := -60; dc <= 60; dc++ {
+			vx, vy := abs(dc), 2*abs(dr)
+			ok := false
+			switch lineGlyph(dr, dc) {
+			case '-':
+				ok = 5*vy <= 2*vx
+			case '|':
+				ok = 5*vx <= 2*vy && dr != 0
+			case '/':
+				ok = dr*dc < 0
+			case '\\':
+				ok = dr*dc > 0
+			}
+			if !ok {
+				t.Fatalf("lineGlyph(%d, %d) = %c", dr, dc, lineGlyph(dr, dc))
+			}
+			n++
+		}
+	}
+	if n != 121*121 {
+		t.Fatal(n)
+	}
+	// 代表の向き (行は下が正) と、'-' と '/' の境目 (5・2|dr| = 2|dc|) の両側
+	for _, c := range []struct {
+		dr, dc int
+		want   rune
+	}{{0, 5, '-'}, {-5, 0, '|'}, {-2, 4, '/'}, {2, 4, '\\'}, {-2, -4, '\\'}, {2, -4, '/'}, {0, 0, '-'}, {1, 5, '-'}, {-1, 4, '/'}, {5, 1, '|'}, {4, 1, '|'}} {
+		if got := lineGlyph(c.dr, c.dc); got != c.want {
+			t.Fatalf("lineGlyph(%d, %d) = %c, want %c", c.dr, c.dc, got, c.want)
+		}
+	}
+}

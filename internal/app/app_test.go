@@ -71,6 +71,48 @@ func TestAC_1_1_OrionAboveHorizon(t *testing.T) {
 	}
 }
 
+// AC-2-1: 東京・2026-01-15T21:00+09:00 で sky now を実行すると、出力に「オリオン」の名前が含まれる。
+// 既定の大きさ (80 × 24) でも、広い端末でも。
+func TestAC_2_1_OrionName(t *testing.T) {
+	for _, args := range [][]string{
+		{"--at", "2026-01-15T21:00:00+09:00", "--city", "tokyo"},
+		{"--at", "2026-01-15T21:00:00+09:00", "--width", "120", "--height", "40"},
+		{"--at", "2026-01-15T21:00:00+09:00", "--no-lines"},
+	} {
+		out := runNowOut(t, args...)
+		if !strings.Contains(out, "オリオン") {
+			t.Fatalf("AC-2-1: %v で「オリオン」がない\n%s", args, out)
+		}
+	}
+}
+
+// chart は見出しを除いた図の部分 (見出しの日付には '-' がある)。
+func chart(out string) string {
+	return strings.SplitN(out, "\n", 2)[1]
+}
+
+// AC-2-3: --no-lines を付けると星座線の文字が出力に含まれない。付けなければ含まれる。
+func TestAC_2_3_NoLines(t *testing.T) {
+	const lineChars = `-|/\`
+	for _, at := range []string{"2026-01-15T21:00:00+09:00", "2026-08-01T21:00:00+09:00", "2026-04-20T03:00:00+09:00"} {
+		for _, wh := range [][2]string{{"80", "24"}, {"120", "40"}, {"20", "8"}} {
+			base := []string{"--at", at, "--width", wh[0], "--height", wh[1]}
+			off := runNowOut(t, append(base, "--no-lines")...)
+			if strings.ContainsAny(chart(off), lineChars) {
+				t.Fatalf("AC-2-3: %v --no-lines で線の文字がある\n%s", base, off)
+			}
+			on := runNowOut(t, base...)
+			if wh[0] != "20" && !strings.ContainsAny(chart(on), lineChars) {
+				t.Fatalf("AC-2-3: %v で線がない\n%s", base, on)
+			}
+			// 線を消しても、星と星座の名前は同じだけ出る (線は星と名前に場所を譲るので)
+			if strings.Count(on, "座") != strings.Count(off, "座") {
+				t.Fatalf("AC-2-3: %v 星座の名前の数が変わった\n%s\n%s", base, on, off)
+			}
+		}
+	}
+}
+
 func checkSize(t *testing.T, out string, w, h int) {
 	t.Helper()
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
@@ -105,7 +147,7 @@ func TestNowDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.city.Key != "tokyo" || !o.at.Equal(fixed) || o.width != 80 || o.height != 24 {
+	if o.city.Key != "tokyo" || !o.at.Equal(fixed) || o.width != 80 || o.height != 24 || !o.lines {
 		t.Fatalf("%+v", o)
 	}
 	out := runNowOut(t)
@@ -124,6 +166,7 @@ func TestNowRejects(t *testing.T) {
 		{"--height", "7"},
 		{"--height", "201"},
 		{"--width", "x"},
+		{"--no-lines=maybe"},
 		{"extra"},
 		// 境界の 1 つ外の年 (UT で数える)
 		{"--at", "1899-12-31T23:59:59Z"},
@@ -145,6 +188,43 @@ func TestNowRejects(t *testing.T) {
 		if _, err := parseNow(a); err != nil {
 			t.Fatalf("%v: %v", a, err)
 		}
+	}
+}
+
+// --no-lines の書き方の誤りは docs/design-system.md の「--no-lines」の文とそのまま同じ。余分な引数には使い方の 1 行を付ける
+// (何が起きたか + 次にすること。flag パッケージの英語の文は出さない)。
+func TestFlagErrorMessages(t *testing.T) {
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"now", "--no-lines=maybe"}, `--no-lines は値を付けずに書く (例: sky now --no-lines): "maybe"`},
+		{[]string{"now", "--no-lines=false"}, `--no-lines は値を付けずに書く (例: sky now --no-lines): "false"`},
+		{[]string{"now", "-no-lines="}, `--no-lines は値を付けずに書く (例: sky now --no-lines): ""`},
+		// 誤った --no-lines の後に別の誤りがあっても、先の --no-lines の文を返す
+		{[]string{"now", "--no-lines=maybe", "--width", "x"}, `--no-lines は値を付けずに書く (例: sky now --no-lines): "maybe"`},
+		{[]string{"now", "extra"}, `知らない引数: extra (` + usageLine + `)`},
+		{[]string{"now", "--no-lines", "extra"}, `知らない引数: extra (` + usageLine + `)`},
+		{[]string{"extra"}, `知らない引数: extra (` + usageLine + `)`},
+	}
+	for _, c := range cases {
+		err := Run(c.args, &strings.Builder{})
+		if err == nil || err.Error() != c.want {
+			t.Errorf("%v: %v (want %q)", c.args, err, c.want)
+		}
+	}
+	// 値なしの --no-lines と、flag が値なしと同じに扱う --no-lines=true は通る
+	for _, a := range [][]string{{"--no-lines"}, {"-no-lines"}, {"--no-lines=true"}} {
+		if o, err := parseNow(a); err != nil || o.lines {
+			t.Fatalf("%v: %+v %v", a, o, err)
+		}
+	}
+	var b strings.Builder
+	if err := Run(nil, &b); err != nil || !strings.HasPrefix(b.String(), "sky now を打つと") || !strings.Contains(b.String(), usageLine) {
+		t.Fatalf("使い方の文はコマンド名 sky now で始める: %v %q", err, b.String())
+	}
+	if (&switchFlag{}).String() != "" {
+		t.Fatal("switchFlag の既定の表示は空")
 	}
 }
 

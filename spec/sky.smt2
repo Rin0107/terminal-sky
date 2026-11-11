@@ -44,3 +44,51 @@
 (assert (not (and (<= (- ry) k) (<= k ry))))
 (check-sat)
 (pop)
+
+; ---- 星座線 (internal/sky/constellation.go・render.go)。実装を確かめるテスト:
+;      TestSpec_SegmentShown・TestSpec_LineInsideHorizon・TestSpec_LineGlyph (internal/sky/spec_test.go)。
+
+; 4. segmentShown: 線を描くのは、両端の少なくとも一方が地平線より上 (高度 > 0) のときだけ。
+;    両端とも地平線より下 (高度 <= 0) なら描かない。
+(push)
+(define-fun shown ((a Real) (b Real)) Bool (or (> a 0.0) (> b 0.0)))
+(declare-const a Real)
+(declare-const b Real)
+(assert (not (= (shown a b) (not (and (<= a 0.0) (<= b 0.0))))))
+(check-sat)
+(pop)
+
+; 5. inside: 線の点は地平線の楕円の内側 (dr^2・rx^2 + dc^2・ry^2 < rx^2・ry^2) にだけ置く。
+;    その点は |dr| <= ry・|dc| <= rx なので、1 の楕円と同じく格子に収まる。
+(push)
+(declare-const rx Int)
+(declare-const ry Int)
+(declare-const dr Int)
+(declare-const dc Int)
+(assert (and (>= rx 1) (>= ry 1)))
+(assert (< (+ (* dr dr rx rx) (* dc dc ry ry)) (* rx rx ry ry)))
+(assert (not (and (<= (- ry) dr) (<= dr ry) (<= (- rx) dc) (<= dc rx))))
+(check-sat)
+(pop)
+
+; 6. lineGlyph: 線の文字は線の向き (行のずれ dr・列のずれ dc。行は下が正) で決まり、見た目の傾きと合う。
+;    文字は縦長 (1 行 ≒ 2 列) なので、見た目の縦は 2|dr|。
+;    '-' はほぼ水平 (5・2|dr| <= 2|dc|)、'|' はほぼ垂直、'/' は右上がり (dr・dc < 0)、'\' は右下がり (dr・dc > 0)。
+(push)
+(declare-const dr Int)
+(declare-const dc Int)
+(define-fun ab ((x Int)) Int (ite (< x 0) (- x) x))
+(define-fun vx () Int (ab dc))
+(define-fun vy () Int (* 2 (ab dr)))
+; 0 = '-', 1 = '|', 2 = '/', 3 = '\'
+(define-fun glyph () Int
+  (ite (<= (* 5 vy) (* 2 vx)) 0
+  (ite (<= (* 5 vx) (* 2 vy)) 1
+  (ite (= (< dr 0) (> dc 0)) 2 3))))
+(assert (not (and
+  (=> (= glyph 0) (<= (* 5 vy) (* 2 vx)))
+  (=> (= glyph 1) (and (<= (* 5 vx) (* 2 vy)) (not (= dr 0))))
+  (=> (= glyph 2) (< (* dr dc) 0))
+  (=> (= glyph 3) (> (* dr dc) 0)))))
+(check-sat)
+(pop)

@@ -1,8 +1,10 @@
 package sky
 
 import (
+	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 // AC-1-4: 等級が明るい星ほど目立つ文字で描かれる (● > * > +)。
@@ -226,6 +228,189 @@ func TestWidthAndTruncate(t *testing.T) {
 	}
 	if got := Truncate("東京abc", 6); got != "東京ab" {
 		t.Fatal(got)
+	}
+}
+
+// countLine は格子の中の、文字 ch の星座線の升の数。
+func countLine(g *grid, ch rune) int {
+	n := 0
+	for _, row := range g.cells {
+		for _, c := range row {
+			if c.r == ch && c.k == line {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// 線はブレゼンハムでつながる。41 × 21 の格子: 中心 (10, 20)・半径 rx 20・ry 10。
+func TestSegment(t *testing.T) {
+	rx, ry, cx, cy := layout(41, 21)
+	if rx != 20 || ry != 10 || cx != 20 || cy != 10 {
+		t.Fatal(rx, ry, cx, cy)
+	}
+	count := countLine
+	// 水平: 両端を含めて 11 升
+	g := newGrid(41, 21)
+	g.segment(10, 15, 10, 25, rx, ry, cx, cy)
+	if count(g, '-') != 11 {
+		t.Fatalf("水平 %d\n%s", count(g, '-'), strings.Join(g.lines(), "\n"))
+	}
+	// 垂直 (上向き)・右上がり・左下がり: どの升も前の升と隣り合う (途切れない)
+	for _, c := range []struct {
+		r0, c0, r1, c1 int
+		ch             rune
+		n              int
+	}{{14, 20, 6, 20, '|', 9}, {12, 14, 8, 22, '/', 9}, {8, 22, 12, 14, '/', 9}, {8, 14, 12, 22, '\\', 9}} {
+		g := newGrid(41, 21)
+		g.segment(c.r0, c.c0, c.r1, c.c1, rx, ry, cx, cy)
+		if got := count(g, c.ch); got != c.n || g.cells[c.r0][c.c0].r != c.ch || g.cells[c.r1][c.c1].r != c.ch {
+			t.Fatalf("%v: %d 升\n%s", c, got, strings.Join(g.lines(), "\n"))
+		}
+	}
+}
+
+// 線は地平線の内側の空いた升にだけ置かれる。
+func TestSegmentClipAndKeep(t *testing.T) {
+	rx, ry, cx, cy := layout(41, 21)
+	count := countLine
+	// 地平線の外 (楕円の外・格子の外) へ伸びる線は、内側の部分だけ描く
+	g := newGrid(41, 21)
+	g.segment(10, 20, 10, 60, rx, ry, cx, cy)
+	if count(g, '-') != 20 || g.cells[10][39].k != line || g.cells[10][40].k != empty {
+		t.Fatalf("外へ伸びる線 %d\n%s", count(g, '-'), strings.Join(g.lines(), "\n"))
+	}
+	// 星・地平線・名前の升は上書きしない
+	g = newGrid(41, 21)
+	g.cells[10][17] = cell{r: '*', k: solid}
+	g.cells[10][18] = cell{r: '.', k: horizon}
+	g.put(10, 19, "東")
+	g.segment(10, 15, 10, 25, rx, ry, cx, cy)
+	if l := g.lines()[10]; l != "               --*.東-----" {
+		t.Fatalf("%q", l)
+	}
+}
+
+// 星座の名前は、見えている星の真ん中に置き、入らなければ近くにずらす。どこにも入らなければ出さない。
+func TestCenterPlacement(t *testing.T) {
+	where := func(g *grid) [2]int {
+		for r := range g.cells {
+			for c := range g.cells[r] {
+				if g.cells[r][c].r == 'A' {
+					return [2]int{r, c}
+				}
+			}
+		}
+		return [2]int{-1, -1}
+	}
+	// 9 行 × 20 列。(4, 10) を真ん中に "ABCD" (幅 4) を置くと、列 8 から
+	g := newGrid(20, 9)
+	g.center(4, 10, "ABCD")
+	if got := where(g); got != [2]int{4, 8} {
+		t.Fatalf("真ん中 %v", got)
+	}
+	// 真ん中の行がふさがっていれば 1 行上
+	g = newGrid(20, 9)
+	g.cells[4][9] = cell{r: '*', k: solid}
+	g.center(4, 10, "ABCD")
+	if got := where(g); got != [2]int{3, 8} {
+		t.Fatalf("1 行上 %v", got)
+	}
+	// 列 10 が上下 3 行ともふさがっていれば、左へ (幅の半分 + 1) ずらす
+	g = newGrid(20, 9)
+	for r := 1; r <= 7; r++ {
+		g.cells[r][10] = cell{r: '*', k: solid}
+	}
+	g.center(4, 10, "ABCD")
+	if got := where(g); got != [2]int{4, 5} {
+		t.Fatalf("左 %v\n%s", got, strings.Join(g.lines(), "\n"))
+	}
+	// 入るところがなければ置かない
+	g = newGrid(6, 3)
+	g.center(1, 3, "ABCDEFGH")
+	if got := where(g); got != [2]int{-1, -1} {
+		t.Fatalf("置かれた %v", got)
+	}
+	// 試す場所は近い順に 21 か所で、重ならない
+	tries := centerTries(4)
+	seen := map[[2]int]bool{}
+	for _, d := range tries {
+		if seen[d] {
+			t.Fatalf("同じ場所を 2 度試す: %v", d)
+		}
+		seen[d] = true
+	}
+	if len(tries) != 21 || tries[0] != [2]int{0, 0} {
+		t.Fatal(tries)
+	}
+}
+
+// 星座: 線・線の星の点・星座の名前を描く。NoLines なら線だけ消える。
+func TestDrawFigures(t *testing.T) {
+	// 天頂の明るい星 A と、東の高度 60 度の暗い星 B を結ぶ「てすと座」
+	a := Seen{Star: Star{Name: "A", Mag: 0}, Alt: 90}
+	b := Seen{Star: Star{Name: "B", Mag: 3}, Alt: 60, Az: 90}
+	fig := Figure{Name: "てすと座", Segments: []Segment{{A: a, B: b}}, Stars: []Seen{a, b}}
+	lines := Draw(Scene{Stars: []Seen{a}, Figures: []Figure{fig}}, 81, 41)
+	out := strings.Join(lines, "\n")
+	// 真ん中の行 (20) に B の + ・線 ・ A の ● が並ぶ。暗い星 B に名前は付けない
+	row := lines[20]
+	if !strings.Contains(row, "+--") || !strings.Contains(row, "--● A") || strings.Contains(out, "B") || !strings.Contains(out, "A") || !strings.Contains(out, "てすと座") {
+		t.Fatalf("\n%s", out)
+	}
+	off := strings.Join(Draw(Scene{Stars: []Seen{a}, Figures: []Figure{fig}, NoLines: true}, 81, 41), "\n")
+	if strings.ContainsAny(off, `-|/\`) || !strings.Contains(off, "+") || !strings.Contains(off, "てすと座") {
+		t.Fatalf("NoLines:\n%s", off)
+	}
+}
+
+// 2 等星の名前は星座の名前に場所を譲り、1 等星の名前は譲らない。
+func TestDrawLabelPriority(t *testing.T) {
+	// 41 × 21 の格子 (中心 (10, 20))。天頂の星の名前は右の (10, 22) に入る。
+	// 星座「ざ」の点を (8, 23) と (12, 23) に置くと、名前の真ん中も (10, 23) で、同じ (10, 22) を取り合う。
+	at := func(dr, dc float64) Seen { // 中心からのずれ (行, 列) の位置の高度・方位
+		r := math.Hypot(dr/10, dc/20)
+		return Seen{Star: Star{Name: "点", Mag: 3}, Alt: 90 - 90*r, Az: math.Atan2(-dc/20, -dr/10) / deg}
+	}
+	fig := Figure{Name: "ざ", Stars: []Seen{at(-2, 3), at(2, 3)}}
+	for _, c := range []struct {
+		mag  float64
+		want int // 星の名前が置かれる列 (右に入れば 22、左へ回れば 17)
+	}{{1.49, 22}, {1.5, 17}} {
+		s := Seen{Star: Star{Name: "QQ", Mag: c.mag}, Alt: 90}
+		lines := Draw(Scene{Stars: []Seen{s}, Figures: []Figure{fig}}, 41, 21)
+		row := lines[10]
+		if got := strings.Index(row, "QQ"); got != c.want || !strings.Contains(strings.Join(lines, "\n"), "ざ") {
+			t.Fatalf("等級 %v: QQ の列 %d, want %d\n%s", c.mag, got, c.want, strings.Join(lines, "\n"))
+		}
+	}
+}
+
+// 本物の星座を、いろいろな大きさ・時刻で描いても、幅と行数を守る (全角の文字の右半分を壊さない)。
+func TestDrawFiguresAllSizes(t *testing.T) {
+	c := City{Key: "x", LatDeg: 35, LonDeg: 139, Zone: jst}
+	n := 0
+	for hr := 0; hr < 24; hr += 3 {
+		at := jan15.Add(time.Duration(hr) * time.Hour)
+		sc := Scene{Stars: Visible(Catalog, c, at), Figures: Figures(Constellations, Stars(), c, at)}
+		for w := 20; w <= 130; w += 7 {
+			for h := 7; h <= 60; h += 5 {
+				l := Draw(sc, w, h)
+				if len(l) != h {
+					t.Fatalf("%dx%d: %d 行", w, h, len(l))
+				}
+				for _, row := range l {
+					if Width(row) > w || len([]rune(row)) > w {
+						t.Fatalf("%v %dx%d: 幅を超えた %q", at, w, h, row)
+					}
+				}
+				n++
+			}
+		}
+	}
+	if n != 8*16*11 {
+		t.Fatal(n)
 	}
 }
 
