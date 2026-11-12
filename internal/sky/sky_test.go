@@ -2,7 +2,6 @@ package sky
 
 import (
 	"math"
-	"strings"
 	"testing"
 	"time"
 )
@@ -196,8 +195,13 @@ func TestFindCity(t *testing.T) {
 	if _, ok := FindCity("atlantis"); ok {
 		t.Fatal("ない都市が見つかった")
 	}
-	if got := strings.Join(CityKeys(), ","); got != "tokyo" {
+	// 一覧の順は Cities の順で、既定の東京が先頭
+	if got := CityKeys(); len(got) != len(Cities) || got[0] != "tokyo" || got[len(got)-1] != Cities[len(Cities)-1].Key {
 		t.Fatal(got)
+	}
+	// 表示の名前でも選べる
+	if c, ok := FindCity("札幌"); !ok || c.Key != "sapporo" {
+		t.Fatal(c, ok)
 	}
 }
 

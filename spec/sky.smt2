@@ -3,7 +3,8 @@
 ; 実装を確かめるテスト: TestSpec_Layout・TestSpec_SymbolMonotonic・TestSpec_ProjectInside・TestSpec_SegmentShown・
 ; TestSpec_LineInsideHorizon・TestSpec_LineGlyph (internal/sky/spec_test.go)、
 ; TestSpec_MoonAge・TestSpec_BodyFits (internal/sky/planet_spec_test.go)、
-; TestSpec_Compass16・TestSpec_HighlightLines (internal/sky/tonight_spec_test.go)。
+; TestSpec_Compass16・TestSpec_HighlightLines (internal/sky/tonight_spec_test.go)、
+; TestSpec_FacingInside・TestSpec_RelAz (internal/sky/facing_test.go)、TestSpec_ExitCode (internal/app/exit_spec_test.go)。
 
 ; 1. layout: 図の高さ h (6〜199。--height 8〜200 から見出しと凡例の 2 行を除いた高さを含む) と幅 w (20〜400) のどれでも、
 ;    地平線の楕円 (中心 cx, cy・半径 rx, ry) が格子に収まり、半径は 1 以上。
@@ -154,5 +155,79 @@
 (declare-const approach Bool)
 (define-fun lines () Int (+ 2 (ite approach 1 0)))
 (assert (not (and (<= 1 lines) (<= lines 3))))
+(check-sat)
+(pop)
+
+; ---- 方角を向いた図 (internal/sky/facing.go)。実装を確かめるテスト:
+;      TestSpec_FacingInside・TestSpec_RelAz (internal/sky/facing_test.go)。
+
+; 11. facingView.pos: 図に入るもの (高度 alt が 0 より大きく 90 以下・向きからの角 rel が -90〜90) は、
+;     行 row = round(t・bottom) (t = (90 - alt)/90、bottom = h - 2) が 0〜bottom、
+;     列のずれ k = round(u・hx) (u = rel・cos(alt)/90、hx = div (w-1) 2) が -hx〜hx で、cx = hx なら列 cx + k は 0〜w-1。
+;     11a: 0 <= t < 1、-1 <= u <= 1 (cos(alt) を 0〜1 の実数 c とおく)。
+(push)
+(declare-const alt Real)
+(declare-const rel Real)
+(declare-const c Real)
+(assert (and (< 0.0 alt) (<= alt 90.0) (<= (- 90.0) rel) (<= rel 90.0) (<= 0.0 c) (<= c 1.0)))
+(define-fun t () Real (/ (- 90.0 alt) 90.0))
+(define-fun u () Real (/ (* rel c) 90.0))
+(assert (not (and (<= 0.0 t) (< t 1.0) (<= (- 1.0) u) (<= u 1.0))))
+(check-sat)
+(pop)
+;     11b: だから y = t・bottom は 0〜bottom、x = u・hx は -hx〜hx の実数 (3 と同じく範囲を前提にする)。
+;     それを四捨五入した整数 (ずれ 1/2 以内) も同じ範囲に入り、0 <= cx - hx・cx + hx <= w - 1。
+(push)
+(declare-const w Int)
+(declare-const h Int)
+(declare-const y Real)
+(declare-const x Real)
+(declare-const row Int)
+(declare-const k Int)
+(assert (and (<= 20 w) (<= w 400) (<= 6 h) (<= h 199)))
+(define-fun bottom () Int (- h 2))
+(define-fun hx () Int (div (- w 1) 2))
+(assert (and (<= 0.0 y) (<= y (to_real bottom)) (<= (- (to_real hx)) x) (<= x (to_real hx))))
+(assert (and (<= (- (to_real row) y) 0.5) (<= (- y (to_real row)) 0.5)))
+(assert (and (<= (- (to_real k) x) 0.5) (<= (- x (to_real k)) 0.5)))
+(assert (not (and (<= 0 row) (<= row bottom) (<= (- hx) k) (<= k hx)
+                  (>= bottom 4) (>= hx 9) (<= (+ hx hx) (- w 1)))))
+(check-sat)
+(pop)
+
+; 12. relAz: 方位 az を向き center から見た角 r = norm360(az - center + 180) - 180 (norm360 は [0, 360)) は
+;     -180 以上 180 未満で、az - center と 360 の倍数だけ違う。
+;     2 点の r の差が 180 より大きいとき、そのあいだの近い方の弧は真後ろ (r = -180) を通る (線は描かない)。
+(push)
+(declare-const d Real) ; az - center + 180
+(declare-const n Int)
+(declare-const m Real) ; norm360(d) = d - 360・n
+(assert (= m (- d (* 360.0 (to_real n)))))
+(assert (and (<= 0.0 m) (< m 360.0)))
+(define-fun r () Real (- m 180.0))
+(assert (not (and (<= (- 180.0) r) (< r 180.0) (= (- (- d 180.0) r) (* 360.0 (to_real n))))))
+(check-sat)
+(pop)
+(push)
+(declare-const r1 Real)
+(declare-const r2 Real)
+(assert (and (<= (- 180.0) r1) (< r1 180.0) (<= (- 180.0) r2) (< r2 180.0) (<= r1 r2)))
+; 差が 180 より大きければ、まっすぐ (r1 → r2) より、真後ろを通る方 (r2 → 180 = -180 → r1) が短い
+(assert (> (- r2 r1) 180.0))
+(assert (not (< (+ (- 180.0 r2) (+ r1 180.0)) (- r2 r1))))
+(check-sat)
+(pop)
+
+; ---- 終了コード (internal/app/app.go)。実装を確かめるテスト: TestSpec_ExitCode (internal/app/exit_spec_test.go)。
+
+; 13. ExitCode: 成功は 0、引数の誤り (打ち直せば通る) は 2、それ以外の失敗は 1。3 つは重ならず、どの結果にも 1 つ決まる。
+(push)
+(declare-const ok Bool)
+(declare-const usage Bool)
+(define-fun code () Int (ite ok 0 (ite usage 2 1)))
+(assert (not (and (=> ok (= code 0))
+                  (=> (and (not ok) usage) (= code 2))
+                  (=> (and (not ok) (not usage)) (= code 1))
+                  (or (= code 0) (= code 1) (= code 2)))))
 (check-sat)
 (pop)

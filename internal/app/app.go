@@ -5,6 +5,7 @@
 package app
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -28,19 +29,56 @@ const (
 	MinYear, MaxYear = 1900, 2100
 )
 
+// 終了コード (docs/design-system.md の「終了コード」)。
+const (
+	ExitOK    = 0
+	ExitFail  = 1 // 引数は正しいが、できなかった (書けない・今夜の空を決められない)
+	ExitUsage = 2 // 引数の誤り (打ち直せば通る)
+)
+
+// usageError は引数の誤り。文はそのままで、終了コードだけを ExitUsage にする。
+type usageError struct{ err error }
+
+func (e usageError) Error() string { return e.err.Error() }
+func (e usageError) Unwrap() error { return e.err }
+
+// usage は誤りを引数の誤りにする (nil は nil のまま)。
+func usage(err error) error {
+	if err == nil {
+		return nil
+	}
+	return usageError{err}
+}
+
+// ExitCode は Run の返した誤りの終了コード。
+func ExitCode(err error) int {
+	var u usageError
+	switch {
+	case err == nil:
+		return ExitOK
+	case errors.As(err, &u):
+		return ExitUsage
+	}
+	return ExitFail
+}
+
 // Run は引数を受け取って結果を out に書く。
 func Run(args []string, out io.Writer) error {
-	if len(args) > 0 && args[0] == "now" {
-		return runNow(args[1:], out)
-	}
-	if len(args) > 0 && args[0] == "tonight" {
-		return runTonight(args[1:], out)
+	if len(args) > 0 {
+		switch args[0] {
+		case "now":
+			return runNow(args[1:], out)
+		case "tonight":
+			return runTonight(args[1:], out)
+		case "cities":
+			return runCities(args[1:], out)
+		}
 	}
 	fs := flag.NewFlagSet("terminal-sky", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	showVersion := fs.Bool("version", false, "バージョンを表示する")
 	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("引数: %w", err)
+		return usage(fmt.Errorf("引数: %w", err))
 	}
 	if *showVersion {
 		_, err := fmt.Fprintln(out, Version)
@@ -54,12 +92,55 @@ func Run(args []string, out io.Writer) error {
 }
 
 // usageLine は使い方の 1 行。余分な引数の誤りの文にも付ける (次に何を打てばよいか分かるように)。
-const usageLine = "使い方: sky now [--city tokyo] [--at 2026-01-15T21:00:00+09:00] [--width 80] [--height 24] [--no-lines]" +
-	" / sky tonight [--city tokyo] [--date 2026-01-15] [--width 80] [--height 24] [--no-lines]"
+// --facing は既定が全天 (値なし) なので、ほかの旗のように既定の値を書かず、選べる値を並べる。
+const usageLine = "使い方: sky now [--city tokyo] [--at 2026-01-15T21:00:00+09:00] [--facing north|east|south|west] [--width 80] [--height 24] [--no-lines]" +
+	" / sky tonight [--city tokyo] [--date 2026-01-15] [--facing north|east|south|west] [--width 80] [--height 24] [--no-lines]" +
+	" / sky cities"
 
 func unknownArg(a string) error {
-	return fmt.Errorf("知らない引数: %s (%s)", a, usageLine)
+	return usage(fmt.Errorf("知らない引数: %s (%s)", a, usageLine))
 }
+
+// unknownCity は一覧にない --city の誤り。近い名前があれば候補を、なければ一覧の出し方と例を付ける。
+func unknownCity(name string) error {
+	if near := sky.SuggestCities(name); len(near) > 0 {
+		return usage(fmt.Errorf("知らない都市: %q (近いのは %s。一覧は sky cities)", name, strings.Join(near, ", ")))
+	}
+	return usage(fmt.Errorf("知らない都市: %q (一覧は sky cities。例: --city tokyo)", name))
+}
+
+// runCities は内蔵の都市の一覧を出す。1 行に 1 都市: --city に書く名前・表示の名前・緯度。
+// 日本 (北から) と海外に分け、既定の東京を先頭に置く。
+func runCities(args []string, out io.Writer) error {
+	if len(args) > 0 {
+		return unknownArg(args[0])
+	}
+	keyW, labelW := 0, 0
+	for _, c := range sky.Cities {
+		keyW, labelW = max(keyW, sky.Width(c.Key)), max(labelW, sky.Width(c.Label))
+	}
+	row := func(c sky.City) string {
+		lat := fmt.Sprintf("北緯 %.1f", c.LatDeg)
+		if c.LatDeg < 0 {
+			lat = fmt.Sprintf("南緯 %.1f", -c.LatDeg)
+		}
+		return "  " + pad(c.Key, keyW) + "  " + pad(c.Label, labelW) + "  " + lat
+	}
+	lines := []string{"選べる都市 (sky now --city <名前>。既定は tokyo)", "日本"}
+	var abroad []string
+	for _, c := range sky.Cities {
+		if c.Abroad {
+			abroad = append(abroad, row(c))
+		} else {
+			lines = append(lines, row(c))
+		}
+	}
+	lines = append(append(lines, "海外"), abroad...)
+	return write(out, lines)
+}
+
+// pad は s の後ろを空白で埋めて、端末での幅を w にする (全角は 2 と数える)。
+func pad(s string, w int) string { return s + strings.Repeat(" ", w-sky.Width(s)) }
 
 // switchFlag は値を取らない旗 (--no-lines)。flag パッケージの英語の誤りの文
 // (invalid boolean value ...) を出さないように、書き方の誤りは Set で覚えておき、Parse の後に決まりの形の文で返す。
@@ -87,13 +168,14 @@ type nowOptions struct {
 	at     time.Time
 	width  int
 	height int
-	lines  bool // 星座線を描くか (--no-lines で消す)
+	lines  bool       // 星座線を描くか (--no-lines で消す)
+	facing sky.Facing // 見る方角 (--facing。省くと全天)
 }
 
 // skyFlags は sky now と sky tonight に共通の引数。when は時刻の旗 (--at か --date) の文字列。
 type skyFlags struct {
 	fs                   *flag.FlagSet
-	city, when           *string
+	city, when, facing   *string
 	width, height        *int
 	noLines              switchFlag
 	whenName, whenSample string // 時刻の旗の名前と、書き方を誤ったときの文 (正しい書き方の例つき)
@@ -105,6 +187,7 @@ func newSkyFlags(cmd, when, sample, usage string) *skyFlags {
 	f.fs.SetOutput(io.Discard)
 	f.city = f.fs.String("city", "tokyo", "観測地の都市")
 	f.when = f.fs.String(when, "", usage)
+	f.facing = f.fs.String("facing", "", "見る方角 (north・east・south・west)。省くと全天")
 	f.width = f.fs.Int("width", 80, "描画の幅")
 	f.height = f.fs.Int("height", 24, "描画の高さ")
 	f.fs.Var(&f.noLines, "no-lines", "星座線を描かない")
@@ -125,7 +208,13 @@ func (f *skyFlags) parse(args []string, minHeight int) (nowOptions, error) {
 	}
 	c, ok := sky.FindCity(*f.city)
 	if !ok {
-		return nowOptions{}, fmt.Errorf("知らない都市: %q (選べるのは %s)", *f.city, strings.Join(sky.CityKeys(), ", "))
+		return nowOptions{}, unknownCity(*f.city)
+	}
+	facing := sky.AllSky
+	if *f.facing != "" {
+		if facing, ok = sky.ParseFacing(*f.facing); !ok {
+			return nowOptions{}, fmt.Errorf("--facing は %s のどれか: %q", strings.Join(sky.FacingKeys(), "・"), *f.facing)
+		}
 	}
 	if *f.width < MinWidth || *f.width > MaxWidth {
 		return nowOptions{}, fmt.Errorf("--width は %d〜%d: %d", MinWidth, MaxWidth, *f.width)
@@ -133,7 +222,7 @@ func (f *skyFlags) parse(args []string, minHeight int) (nowOptions, error) {
 	if *f.height < minHeight || *f.height > MaxHeight {
 		return nowOptions{}, fmt.Errorf("--height は %d〜%d: %d", minHeight, MaxHeight, *f.height)
 	}
-	return nowOptions{city: c, width: *f.width, height: *f.height, lines: !f.noLines.on}, nil
+	return nowOptions{city: c, width: *f.width, height: *f.height, lines: !f.noLines.on, facing: facing}, nil
 }
 
 // whenAt は時刻の旗を layout で読む (読む時刻の帯は zone)。空なら今。
@@ -177,24 +266,53 @@ func parseNow(args []string) (nowOptions, error) {
 // (全部で o.height 行。図の高さは o.height - 2 - len(notes))。
 func render(o nowOptions, head string, notes []string) []string {
 	seen := sky.Visible(sky.Catalog, o.city, o.at)
-	head = fmt.Sprintf("%s %s %s 地平線より上の明るい星 %d 個", o.city.Label, o.at.In(o.city.Zone).Format("2006-01-02 15:04 MST"), head, len(seen))
-	lines := []string{sky.Truncate(head, o.width)}
+	parts := []string{o.city.Label, o.at.In(o.city.Zone).Format("2006-01-02 15:04 MST")}
+	if head != "" {
+		parts = append(parts, head)
+	}
+	// 星の数の言い方は、幅に入る長いものから選ぶ (入らなければ短くする。どれも入らなければ幅で切る)
+	var top string
+	for _, tail := range starCount(seen, o.facing) {
+		top = strings.Join(append(parts[:len(parts):len(parts)], tail), " ")
+		if sky.Width(top) <= o.width {
+			break
+		}
+	}
+	lines := []string{sky.Truncate(strings.TrimRight(top, " "), o.width)}
 	scene := sky.Scene{
 		Stars:   seen,
 		Figures: sky.Figures(sky.Constellations, sky.Stars(), o.city, o.at),
 		NoLines: !o.lines,
 		Moon:    sky.MoonAt(o.city, o.at),
 		Planets: sky.VisiblePlanets(sky.Planets, o.city, o.at),
+		Facing:  o.facing,
 	}
 	lines = append(lines, sky.Draw(scene, o.width, o.height-2-len(notes))...)
 	lines = append(lines, sky.Legend(scene.Moon, scene.Planets, o.width))
 	return append(lines, notes...) // notes は幅に収めてある (sky.Highlights)
 }
 
+// starCount は見出しの終わりの、図の明るい星の数の言い方を、長い順に返す (幅に入るものを使う)。
+// 全天なら「地平線より上の明るい星 23 個」→「星 23 個」→ なし。
+// 方角を向いた図なら「南を向いた空の明るい星 12 個」→「南の空」(向きは空と見比べるのに要るので最後まで残す)。
+// 方角を向いた図の数は、図に入る星だけ (背中側の星は数えない。図と数が合うように)。
+func starCount(seen []sky.Seen, f sky.Facing) []string {
+	if f == sky.AllSky {
+		return []string{fmt.Sprintf("地平線より上の明るい星 %d 個", len(seen)), fmt.Sprintf("星 %d 個", len(seen)), ""}
+	}
+	n := 0
+	for _, s := range seen {
+		if f.Shows(s.Alt, s.Az) {
+			n++
+		}
+	}
+	return []string{fmt.Sprintf("%sを向いた空の明るい星 %d 個", f.Label(), n), f.Label() + "の空"}
+}
+
 func runNow(args []string, out io.Writer) error {
 	o, err := parseNow(args)
 	if err != nil {
-		return err
+		return usage(err)
 	}
 	return write(out, render(o, "", nil))
 }
@@ -231,7 +349,7 @@ func parseTonight(args []string) (tonightOptions, error) {
 func runTonight(args []string, out io.Writer) error {
 	o, err := parseTonight(args)
 	if err != nil {
-		return err
+		return usage(err)
 	}
 	n, err := sky.Tonight(o.city, o.day)
 	if err != nil {

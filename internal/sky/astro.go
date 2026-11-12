@@ -3,45 +3,8 @@ package sky
 import (
 	"math"
 	"sort"
-	"strings"
 	"time"
 )
-
-// City は内蔵の観測地。利用者の現在地は受け取らず、ここから名前で選ぶだけ。
-type City struct {
-	Key    string         // --city で指定する名前
-	Label  string         // 表示する名前
-	LatDeg float64        // 緯度 [度] (北が正)
-	LonDeg float64        // 経度 [度] (東が正)
-	Zone   *time.Location // 表示に使う時刻の帯
-}
-
-var jst = time.FixedZone("JST", 9*60*60)
-
-// Cities は内蔵の都市。まずは東京だけ。
-var Cities = []City{
-	{Key: "tokyo", Label: "東京", LatDeg: 35.6895, LonDeg: 139.6917, Zone: jst},
-}
-
-// FindCity は名前 (大文字小文字は区別しない) で都市を探す。
-func FindCity(key string) (City, bool) {
-	k := strings.ToLower(strings.TrimSpace(key))
-	for _, c := range Cities {
-		if c.Key == k {
-			return c, true
-		}
-	}
-	return City{}, false
-}
-
-// CityKeys は選べる都市の名前の一覧。
-func CityKeys() []string {
-	keys := make([]string, 0, len(Cities))
-	for _, c := range Cities {
-		keys = append(keys, c.Key)
-	}
-	return keys
-}
 
 const (
 	deg = math.Pi / 180

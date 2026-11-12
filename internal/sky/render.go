@@ -141,6 +141,7 @@ type Scene struct {
 	NoLines bool     // true なら星座線を描かない (星の点と星座の名前は描く)
 	Moon    MoonSeen // 月 (地平線より上のときだけ描く)
 	Planets []PlanetSeen
+	Facing  Facing // 図の向き (AllSky なら真上から見た全天)
 }
 
 // Draw は空を真上から見た図 (天頂が中心、地平線が縁。上が北・左が東・下が南・右が西) を、
@@ -150,8 +151,8 @@ type Scene struct {
 // 星座線と地平線の点は、星と名前に場所を譲る。どの行も幅 w 以下で、行数は h 以下。
 func Draw(sc Scene, w, h int) []string {
 	g := newGrid(w, h)
-	v := newView(w, h)
-	g.horizon(v)
+	v := newProjection(sc.Facing, w, h)
+	v.frame(g)
 	if sc.Moon.Up() {
 		g.body(v, sc.Moon.Alt, sc.Moon.Az, MoonSymbol(sc.Moon.Age))
 	}
@@ -177,7 +178,23 @@ func Draw(sc Scene, w, h int) []string {
 	return g.lines()
 }
 
-// view は格子の上の地平線の楕円 (半径 rx・ry、中心 cx・cy)。
+// projection は空 (高度・方位) を文字の格子に写す決まり。全天の図 (view) と、方角を向いた図 (facingView) がある。
+type projection interface {
+	pos(alt, az float64) (row, col int) // 置く升 (図の外のこともある。線の端は地平線の下・背中側にもある)
+	shows(alt, az float64) bool         // 星・天体を図に描くか (描くなら pos は格子の中)
+	inside(row, col int) bool           // 線の点を置いてよい升か
+	crosses(a, b Seen) bool             // 線が図の継ぎ目 (背中側) をまたぐか (またぐ線は描かない)
+	frame(g *grid)                      // 地平線と方角を描く
+}
+
+func newProjection(f Facing, w, h int) projection {
+	if f == AllSky {
+		return newView(w, h)
+	}
+	return newFacingView(f, w, h)
+}
+
+// view は全天の図。格子の上の地平線の楕円 (半径 rx・ry、中心 cx・cy)。
 type view struct{ rx, ry, cx, cy int }
 
 func newView(w, h int) view {
@@ -185,8 +202,13 @@ func newView(w, h int) view {
 	return view{rx, ry, cx, cy}
 }
 
-// at は星を置く升 (行, 列)。
-func (v view) at(s Seen) (row, col int) { return project(s.Alt, s.Az, v.rx, v.ry, v.cx, v.cy) }
+func (v view) pos(alt, az float64) (row, col int) { return project(alt, az, v.rx, v.ry, v.cx, v.cy) }
+
+// shows: 全天の図は渡されたものを全部描く (呼ぶ側が地平線より上に絞ってある。楕円に入るのは spec/sky.smt2 の 3)。
+func (v view) shows(alt, az float64) bool { return true }
+func (v view) inside(row, col int) bool   { return insideHorizon(row, col, v.rx, v.ry, v.cx, v.cy) }
+func (v view) crosses(a, b Seen) bool     { return false }
+func (v view) frame(g *grid)              { g.horizon(v) }
 
 // horizon は地平線の点と方角 (N・S・E・W) を描く。
 func (g *grid) horizon(v view) {
@@ -203,10 +225,13 @@ func (g *grid) horizon(v view) {
 }
 
 // stars は明るい星を描き、描けた (もっと明るい星に先を越されなかった) かを返す。
-func (g *grid) stars(v view, seen []Seen) []bool {
+func (g *grid) stars(v projection, seen []Seen) []bool {
 	drawn := make([]bool, len(seen))
 	for i, s := range seen {
-		row, col := v.at(s)
+		if !v.shows(s.Alt, s.Az) {
+			continue
+		}
+		row, col := v.pos(s.Alt, s.Az)
 		if !g.cells[row][col].k.occupied() {
 			g.cells[row][col] = cell{r: Symbol(s.Star.Mag), k: solid}
 			drawn[i] = true
@@ -216,34 +241,43 @@ func (g *grid) stars(v view, seen []Seen) []bool {
 }
 
 // starLabels は描けた星の名前を明るい順に置く。first なら 1 等星 (● と *) だけ、でなければ 2 等星 (+) だけ。
-func (g *grid) starLabels(v view, seen []Seen, drawn []bool, first bool) {
+func (g *grid) starLabels(v projection, seen []Seen, drawn []bool, first bool) {
 	for i, s := range seen {
 		if drawn[i] && (Symbol(s.Star.Mag) != '+') == first {
-			row, col := v.at(s)
+			row, col := v.pos(s.Alt, s.Az)
 			g.label(row, col, s.Star.Name)
 		}
 	}
 }
 
-// points は星座の星を点だけ (名前なしで) 描く。星・名前の升には置かない。
-func (g *grid) points(v view, stars []Seen) {
+// points は星座の星を点だけ (名前なしで) 描く。星・名前の升と、図に入らない星には置かない。
+func (g *grid) points(v projection, stars []Seen) {
 	for _, s := range stars {
-		row, col := v.at(s)
+		if !v.shows(s.Alt, s.Az) {
+			continue
+		}
+		row, col := v.pos(s.Alt, s.Az)
 		if !g.cells[row][col].k.occupied() {
 			g.cells[row][col] = cell{r: Symbol(s.Star.Mag), k: solid}
 		}
 	}
 }
 
-// figureName は星座の名前を、見えている星の真ん中に置く (入らなければ近くにずらす)。
-func (g *grid) figureName(v view, f Figure) {
-	sumR, sumC := 0, 0
+// figureName は星座の名前を、図に入っている星の真ん中に置く (入らなければ近くにずらす)。
+// 図に入っている星がなければ (背中側の星座) 置かない。
+func (g *grid) figureName(v projection, f Figure) {
+	sumR, sumC, n := 0, 0, 0
 	for _, s := range f.Stars {
-		row, col := v.at(s)
-		sumR, sumC = sumR+row, sumC+col
+		if !v.shows(s.Alt, s.Az) {
+			continue
+		}
+		row, col := v.pos(s.Alt, s.Az)
+		sumR, sumC, n = sumR+row, sumC+col, n+1
 	}
-	n := float64(len(f.Stars))
-	g.center(int(math.Round(float64(sumR)/n)), int(math.Round(float64(sumC)/n)), f.Name)
+	if n == 0 {
+		return
+	}
+	g.center(int(math.Round(float64(sumR)/float64(n))), int(math.Round(float64(sumC)/float64(n))), f.Name)
 }
 
 // center は名前を (row, col) を真ん中にして置く。入らなければ近い順に、
@@ -314,22 +348,30 @@ func step(x int) int {
 	return 0
 }
 
-// constellationLine は星座線 1 本を、両端の星の升を結んで描く。
-func (g *grid) constellationLine(v view, s Segment) {
-	r0, c0 := v.at(s.A)
-	r1, c1 := v.at(s.B)
-	g.segment(r0, c0, r1, c1, v.rx, v.ry, v.cx, v.cy)
+// constellationLine は星座線 1 本を、両端の星の升を結んで描く。図の継ぎ目をまたぐ線は描かない。
+func (g *grid) constellationLine(v projection, s Segment) {
+	if v.crosses(s.A, s.B) {
+		return
+	}
+	r0, c0 := v.pos(s.A.Alt, s.A.Az)
+	r1, c1 := v.pos(s.B.Alt, s.B.Az)
+	g.segmentIn(r0, c0, r1, c1, v.inside)
 }
 
-// segment は (r0, c0) から (r1, c1) へ線を引く (ブレゼンハム)。地平線の内側の空いた升にだけ置く。
+// segment は (r0, c0) から (r1, c1) へ線を引く (ブレゼンハム)。地平線の楕円の内側の空いた升にだけ置く。
 func (g *grid) segment(r0, c0, r1, c1, rx, ry, cx, cy int) {
+	g.segmentIn(r0, c0, r1, c1, func(r, c int) bool { return insideHorizon(r, c, rx, ry, cx, cy) })
+}
+
+// segmentIn は (r0, c0) から (r1, c1) へ線を引く (ブレゼンハム)。inside が真の空いた升にだけ置く。
+func (g *grid) segmentIn(r0, c0, r1, c1 int, inside func(r, c int) bool) {
 	ch := lineGlyph(r1-r0, c1-c0)
 	dc, dr := abs(c1-c0), -abs(r1-r0)
 	sc, sr := step(c1-c0), step(r1-r0)
 	e := dc + dr
 	r, c := r0, c0
 	for {
-		if insideHorizon(r, c, rx, ry, cx, cy) && g.cells[r][c].k == empty {
+		if inside(r, c) && g.cells[r][c].k == empty {
 			g.cells[r][c] = cell{r: ch, k: line}
 		}
 		if r == r1 && c == c1 {
@@ -389,8 +431,12 @@ func bodyColumns(col int) [4]int { return [4]int{col, col - 1, col + 1, col - 2}
 
 // body は月・惑星の記号を、高度 alt・方位 az の升に置く。全角の記号が右の端からはみ出すときや、
 // 方角・ほかの天体と重なるときは bodyColumns の順にずらす。どこも空いていなければ置かない (凡例には出る)。
-func (g *grid) body(v view, alt, az float64, sym rune) {
-	row, col := project(alt, az, v.rx, v.ry, v.cx, v.cy)
+// 図に入らない (方角を向いた図の背中側の) ものは置かない (凡例には出る)。
+func (g *grid) body(v projection, alt, az float64, sym rune) {
+	if !v.shows(alt, az) {
+		return
+	}
+	row, col := v.pos(alt, az)
 	n := RuneWidth(sym)
 	for _, c := range bodyColumns(col) {
 		if g.vacant(row, c, n) {

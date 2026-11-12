@@ -23,6 +23,9 @@
 | 10. 見どころは 1〜3 行 | `TestSpec_HighlightLines` (東京の 1 年の全部の夜) |
 | (日没は日の出の前の日の入りで、太陽の高度がちょうど地平線の値) | `TestSpec_SunsetCrossing` (東京の 1 年の全部の日) |
 | (接近と数えるのは、月と惑星が両方地平線より上で 5 度以内のときだけ) | `TestSpec_ApproachVisible` (1 年の夜の全部の時刻) |
+| 11. 方角を向いた図に入るもの (高度 0 より上・向きから左右 90 度) は、地平線の行より上で左右の縁の中に置かれる | `TestSpec_FacingInside` (`internal/sky/facing_test.go`。4 つの向き × 高度 0.25 度・角 0.5 度刻み × 大きさ) |
+| 12. 向きから見た角は -180〜180 未満で、差が 180 を超える 2 点の線は背中側を通る (描かない) | `TestSpec_RelAz` (`internal/sky/facing_test.go`。4 つの向き × 方位 -360〜720 の 0.25 度刻み) |
+| 13. 終了コードは 成功 0・引数の誤り 2・それ以外の失敗 1 | `TestSpec_ExitCode` (`internal/app/exit_spec_test.go`) |
 
 決まり:
 - 振る舞いを変える PR は、先に spec を変える。spec と実装と TestSpec_ を同じ PR で

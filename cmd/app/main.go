@@ -11,6 +11,6 @@ import (
 func main() {
 	if err := app.Run(os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "terminal-sky:", err)
-		os.Exit(1)
+		os.Exit(app.ExitCode(err)) // 引数の誤りは 2、できなかったときは 1 (docs/design-system.md)
 	}
 }
