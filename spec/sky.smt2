@@ -1,14 +1,17 @@
 ; terminal-sky の描画の仕様 (internal/sky/render.go)。
 ; 決まり: 証明したい性質の「否定」を assert し、(check-sat) が unsat なら証明できた。
-; 実装を確かめるテスト: TestSpec_Layout・TestSpec_SymbolMonotonic・TestSpec_ProjectInside (internal/sky/spec_test.go)。
+; 実装を確かめるテスト: TestSpec_Layout・TestSpec_SymbolMonotonic・TestSpec_ProjectInside・TestSpec_SegmentShown・
+; TestSpec_LineInsideHorizon・TestSpec_LineGlyph (internal/sky/spec_test.go)、
+; TestSpec_MoonAge・TestSpec_BodyFits (internal/sky/planet_spec_test.go)、
+; TestSpec_Compass16・TestSpec_HighlightLines (internal/sky/tonight_spec_test.go)。
 
-; 1. layout: 図の高さ h (7〜199、見出しの 1 行を除いた高さ) と幅 w (20〜400) のどれでも、
+; 1. layout: 図の高さ h (6〜199。--height 8〜200 から見出しと凡例の 2 行を除いた高さを含む) と幅 w (20〜400) のどれでも、
 ;    地平線の楕円 (中心 cx, cy・半径 rx, ry) が格子に収まり、半径は 1 以上。
 ;    Go の整数の割り算は、0 以上の数どうしでは div と同じ。
 (push)
 (declare-const w Int)
 (declare-const h Int)
-(assert (and (<= 20 w) (<= w 400) (<= 7 h) (<= h 199)))
+(assert (and (<= 20 w) (<= w 400) (<= 6 h) (<= h 199)))
 (define-fun ry0 () Int (div (- h 1) 2))
 (define-fun lim () Int (div (- w 1) 2))
 (define-fun rx () Int (ite (> (* 2 ry0) lim) lim (* 2 ry0)))
@@ -90,5 +93,66 @@
   (=> (= glyph 1) (and (<= (* 5 vx) (* 2 vy)) (not (= dr 0))))
   (=> (= glyph 2) (< (* dr dc) 0))
   (=> (= glyph 3) (> (* dr dc) 0)))))
+(check-sat)
+(pop)
+
+; ---- 惑星と月 (internal/sky/moon.go・render.go)。実装を確かめるテスト:
+;      TestSpec_MoonAge・TestSpec_BodyFits (internal/sky/planet_spec_test.go)。
+
+; 7. 月齢と月の相: 太陽からの離角 e (0 以上 360 未満、norm360 の後) の月齢 age = e/360・S は 0 以上 S 未満。
+;    相 p = floor(age/S・8 + 1/2) mod 8 は 0〜7 で、新月 (age = 0) は 0、満月 (age = S/2) は 4。
+(push)
+(declare-const e Real)
+(declare-const k Int)
+(define-fun S () Real 29.530588853)
+(define-fun age () Real (* (/ e 360.0) S))
+(assert (and (<= 0.0 e) (< e 360.0)))
+; k = floor(age/S・8 + 1/2)
+(assert (<= (to_real k) (+ (* (/ age S) 8.0) 0.5)))
+(assert (< (+ (* (/ age S) 8.0) 0.5) (to_real (+ k 1))))
+(assert (not (and (<= 0.0 age) (< age S)
+                  (<= 0 (mod k 8)) (<= (mod k 8) 7)
+                  (=> (= e 0.0) (= (mod k 8) 0))
+                  (=> (= e 180.0) (= (mod k 8) 4)))))
+(check-sat)
+(pop)
+
+; 8. bodyColumns: 天体の記号 (幅 n = 1 か 2) は、投影した列 col (0 <= col < w、w >= 2) か 1 つ左のどちらかに、
+;    格子からはみ出さずに置ける (0 <= c・c + n <= w)。
+(push)
+(declare-const w Int)
+(declare-const n Int)
+(declare-const col Int)
+(assert (and (>= w 2) (or (= n 1) (= n 2)) (<= 0 col) (< col w)))
+(define-fun fits ((c Int)) Bool (and (<= 0 c) (<= (+ c n) w)))
+(assert (not (or (fits col) (fits (- col 1)))))
+(check-sat)
+(pop)
+
+; ---- 今夜の見どころ (internal/sky/tonight.go)。実装を確かめるテスト:
+;      TestSpec_Compass16・TestSpec_HighlightLines (internal/sky/tonight_spec_test.go)。
+
+; 9. compassIndex: 方位 a (0 以上 360 未満、norm360 の後) の番号 k = floor(a/22.5 + 1/2) は 0〜16 で、
+;    方位は k・22.5 度から ±11.25 度以内。k = 16 (348.75 度以上) は 360 度 = 北で、mod 16 で 0 (北) になる。
+;    だから 16 方位の名前は、いつも方位にいちばん近い 16 方位 (ずれは 11.25 度まで)。
+(push)
+(declare-const a Real)
+(declare-const k Int)
+(assert (and (<= 0.0 a) (< a 360.0)))
+(assert (<= (to_real k) (+ (/ a 22.5) 0.5)))
+(assert (< (+ (/ a 22.5) 0.5) (to_real (+ k 1))))
+(assert (not (and (<= 0 k) (<= k 16)
+                  (<= (- a (* 22.5 (to_real k))) 11.25)
+                  (<= (- (* 22.5 (to_real k)) a) 11.25)
+                  (<= 0 (mod k 16)) (<= (mod k 16) 15))))
+(check-sat)
+(pop)
+
+; 10. highlights: 見どころは 2 行 (一番明るい惑星か「昇る惑星がない」・月齢と月の出入り) に、
+;     接近があれば 1 行を足す。だから 1〜3 行に収まる。
+(push)
+(declare-const approach Bool)
+(define-fun lines () Int (+ 2 (ite approach 1 0)))
+(assert (not (and (<= 1 lines) (<= lines 3))))
 (check-sat)
 (pop)

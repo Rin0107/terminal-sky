@@ -152,7 +152,7 @@ func TestPrecess(t *testing.T) {
 }
 
 func TestNorm360(t *testing.T) {
-	for _, c := range [][2]float64{{0, 0}, {360, 0}, {-1, 359}, {361, 1}, {-360, 0}, {720.5, 0.5}} {
+	for _, c := range [][2]float64{{0, 0}, {360, 0}, {-1, 359}, {361, 1}, {-360, 0}, {720.5, 0.5}, {-1e-17, 0}} {
 		if got := norm360(c[0]); math.Abs(got-c[1]) > 1e-9 {
 			t.Fatalf("norm360(%v) = %v", c[0], got)
 		}

@@ -61,6 +61,9 @@ func norm360(a float64) float64 {
 	if a < 0 {
 		a += 360
 	}
+	if a == 360 { // ごく小さい負の数に 360 を足すと、丸めで 360 ちょうどになる
+		return 0
+	}
 	return a
 }
 
@@ -90,6 +93,11 @@ func Precess(raDeg, decDeg, jd float64) (float64, float64) {
 func Horizontal(s Star, c City, t time.Time) (alt, az float64) {
 	jd := JulianDay(t)
 	ra, dec := Precess(s.RA*15, s.Dec, jd)
+	return horizontalOfDate(ra, dec, c, jd)
+}
+
+// horizontalOfDate は jd の日の赤経・赤緯 [度] を、都市 c から見た高度・方位 [度] に直す。
+func horizontalOfDate(ra, dec float64, c City, jd float64) (alt, az float64) {
 	lst := GMST(jd) + c.LonDeg
 	h := (lst - ra) * deg
 	phi, d := c.LatDeg*deg, dec*deg

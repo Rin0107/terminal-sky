@@ -64,6 +64,9 @@ const (
 	cont         // 全角の文字の右半分
 )
 
+// occupied は星・方角・名前・月・惑星 (全角の右半分も) が置かれた升か。ここには重ねて描かない。
+func (k kind) occupied() bool { return k == solid || k == cont }
+
 type cell struct {
 	r rune
 	k kind
@@ -94,7 +97,7 @@ func (g *grid) free(row, col, n int) bool {
 		if c < 0 || c >= g.w {
 			continue
 		}
-		if k := g.cells[row][c].k; k == solid || k == cont {
+		if g.cells[row][c].k.occupied() {
 			return false
 		}
 	}
@@ -136,17 +139,25 @@ type Scene struct {
 	Stars   []Seen   // 名前を付けて描く明るい星 (明るい順)
 	Figures []Figure // 星座 (線・線の星の点・星座の名前)
 	NoLines bool     // true なら星座線を描かない (星の点と星座の名前は描く)
+	Moon    MoonSeen // 月 (地平線より上のときだけ描く)
+	Planets []PlanetSeen
 }
 
 // Draw は空を真上から見た図 (天頂が中心、地平線が縁。上が北・左が東・下が南・右が西) を、
 // 幅 w・高さ h の文字の格子に描く。重なったら先に描いたものが残る:
-// 方角 → 明るい星 (明るい順) → 1 等星の名前 → 星座の星の点 → 星座の名前 → 2 等星の名前。
+// 方角 → 月 → 惑星 → 明るい星 (明るい順) → 1 等星の名前 → 星座の星の点 → 星座の名前 → 2 等星の名前。
 // 狭い図では場所を取り合うので、1 等星 (● と *) の名前を一番にし、2 等星 (+) の名前は星座の名前に譲る。
 // 星座線と地平線の点は、星と名前に場所を譲る。どの行も幅 w 以下で、行数は h 以下。
 func Draw(sc Scene, w, h int) []string {
 	g := newGrid(w, h)
 	v := newView(w, h)
 	g.horizon(v)
+	if sc.Moon.Up() {
+		g.body(v, sc.Moon.Alt, sc.Moon.Az, MoonSymbol(sc.Moon.Age))
+	}
+	for _, p := range sc.Planets {
+		g.body(v, p.Alt, p.Az, p.Planet.Symbol)
+	}
 	if !sc.NoLines {
 		for _, f := range sc.Figures {
 			for _, s := range f.Segments {
@@ -196,7 +207,7 @@ func (g *grid) stars(v view, seen []Seen) []bool {
 	drawn := make([]bool, len(seen))
 	for i, s := range seen {
 		row, col := v.at(s)
-		if g.cells[row][col].k != solid {
+		if !g.cells[row][col].k.occupied() {
 			g.cells[row][col] = cell{r: Symbol(s.Star.Mag), k: solid}
 			drawn[i] = true
 		}
@@ -218,7 +229,7 @@ func (g *grid) starLabels(v view, seen []Seen, drawn []bool, first bool) {
 func (g *grid) points(v view, stars []Seen) {
 	for _, s := range stars {
 		row, col := v.at(s)
-		if k := g.cells[row][col].k; k != solid && k != cont {
+		if !g.cells[row][col].k.occupied() {
 			g.cells[row][col] = cell{r: Symbol(s.Star.Mag), k: solid}
 		}
 	}
@@ -359,13 +370,45 @@ func project(alt, az float64, rx, ry, cx, cy int) (row, col int) {
 	return row, col
 }
 
-// label は (row, col) の星の名前を、右・左・右上・右下の順に空いているところへ置く。置けなければ置かない。
+// label は (row, col) の星の名前を、右・左・右上・右下・左上・左下の順に空いているところへ置く。置けなければ置かない。
+// 左上・左下は、凡例の 1 行の分だけ図が低くなっても、混んだところ (オリオン座の肩など) の 1 等星の名前を残すため。
 func (g *grid) label(row, col int, name string) {
 	n := Width(name)
-	for _, c := range [][2]int{{row, col + 2}, {row, col - 1 - n}, {row - 1, col + 1}, {row + 1, col + 1}} {
+	for _, c := range [][2]int{{row, col + 2}, {row, col - 1 - n}, {row - 1, col + 1}, {row + 1, col + 1}, {row - 1, col - 1 - n}, {row + 1, col - 1 - n}} {
 		if g.free(c[0], c[1], n) {
 			g.put(c[0], c[1], name)
 			return
 		}
 	}
+}
+
+// bodyColumns は記号を列 col に置くときに試す左端の列を、近い順に返す (col・1 つ左・1 つ右・2 つ左)。
+// 仕様: spec/sky.smt2 の 8 (0 <= col < w・幅は 1 か 2 なら、はじめの 2 つのどちらかは格子に収まる)。
+// 後ろの 2 つは、接近した天体 (月と惑星など) が同じ升に来たとき、並べて両方を見せるため。
+func bodyColumns(col int) [4]int { return [4]int{col, col - 1, col + 1, col - 2} }
+
+// body は月・惑星の記号を、高度 alt・方位 az の升に置く。全角の記号が右の端からはみ出すときや、
+// 方角・ほかの天体と重なるときは bodyColumns の順にずらす。どこも空いていなければ置かない (凡例には出る)。
+func (g *grid) body(v view, alt, az float64, sym rune) {
+	row, col := project(alt, az, v.rx, v.ry, v.cx, v.cy)
+	n := RuneWidth(sym)
+	for _, c := range bodyColumns(col) {
+		if g.vacant(row, c, n) {
+			g.put(row, c, string(sym))
+			return
+		}
+	}
+}
+
+// vacant は (row, col) から幅 n が格子の中にあり、どの升にも星・名前・天体がないか。
+func (g *grid) vacant(row, col, n int) bool {
+	if row < 0 || row >= g.h || col < 0 || col+n > g.w {
+		return false
+	}
+	for c := col; c < col+n; c++ {
+		if g.cells[row][c].k.occupied() {
+			return false
+		}
+	}
+	return true
 }

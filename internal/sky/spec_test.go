@@ -11,7 +11,7 @@ import (
 func TestSpec_Layout(t *testing.T) {
 	n := 0
 	for w := 20; w <= 400; w++ {
-		for h := 7; h <= 199; h++ {
+		for h := 6; h <= 199; h++ {
 			rx, ry, cx, cy := layout(w, h)
 			if ry < 1 || rx < 1 || cx-rx < 0 || cx+rx > w-1 || cy-ry < 0 || cy+ry > h-1 {
 				t.Fatalf("%dx%d: rx %d ry %d cx %d cy %d", w, h, rx, ry, cx, cy)
@@ -19,7 +19,7 @@ func TestSpec_Layout(t *testing.T) {
 			n++
 		}
 	}
-	if n != 381*193 {
+	if n != 381*194 {
 		t.Fatal(n)
 	}
 }
@@ -55,7 +55,7 @@ func TestSpec_SymbolMonotonic(t *testing.T) {
 // TestSpec_ProjectInside: 3. 高度 0〜90 の星は楕円の中 (|行 - cy| <= ry・|列 - cx| <= rx)。
 func TestSpec_ProjectInside(t *testing.T) {
 	n := 0
-	for _, wh := range [][2]int{{20, 7}, {21, 11}, {44, 23}, {60, 19}, {80, 23}, {400, 199}} {
+	for _, wh := range [][2]int{{20, 6}, {20, 7}, {21, 11}, {44, 23}, {60, 19}, {80, 23}, {400, 199}} {
 		rx, ry, cx, cy := layout(wh[0], wh[1])
 		for alt := 0.0; alt <= 90; alt += 0.5 {
 			for az := 0.0; az < 360; az += 1 {
@@ -67,7 +67,7 @@ func TestSpec_ProjectInside(t *testing.T) {
 			}
 		}
 	}
-	if n != 6*181*360 {
+	if n != 7*181*360 {
 		t.Fatal(n)
 	}
 	// 天頂は中心、高度 0 の北は上の縁、東は左の縁
@@ -143,7 +143,7 @@ func checkSegmentsInside(t *testing.T, w, h int) {
 // TestSpec_LineInsideHorizon: 5. 楕円の内側の点は、どの大きさの格子にも収まる (線は格子からはみ出さない)。
 func TestSpec_LineInsideHorizon(t *testing.T) {
 	n, want := 0, 0
-	for _, wh := range [][2]int{{20, 7}, {21, 11}, {44, 23}, {60, 19}, {80, 23}, {131, 59}} {
+	for _, wh := range [][2]int{{20, 6}, {20, 7}, {21, 11}, {44, 23}, {60, 19}, {80, 23}, {131, 59}} {
 		w, h := wh[0], wh[1]
 		want += 9 * w * h
 		rx, ry, cx, cy := layout(w, h)
